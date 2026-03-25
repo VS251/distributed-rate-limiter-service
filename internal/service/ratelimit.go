@@ -15,6 +15,12 @@ import (
 	"github.com/varunsalian/ratelimiter/internal/tenant"
 )
 
+// ErrInvalidConfig is returned when a tenant plan has invalid parameters
+// (e.g., zero RefillRate for a token bucket plan). This signals server-side
+// misconfiguration — the client's request is valid, the stored plan is not.
+// Transport layers should map this to INTERNAL (not INVALID_ARGUMENT).
+var ErrInvalidConfig = errors.New("service: invalid plan configuration")
+
 // CheckRequest is the input to a rate limit check.
 type CheckRequest struct {
 	TenantID string
@@ -103,17 +109,17 @@ func validatePlan(p tenant.Plan) error {
 	switch p.Algorithm {
 	case tenant.AlgorithmTokenBucket:
 		if p.Capacity <= 0 {
-			return fmt.Errorf("service: token bucket plan for %q requires Capacity > 0, got %d", p.KeyPattern, p.Capacity)
+			return fmt.Errorf("%w: token bucket plan for %q requires Capacity > 0, got %d", ErrInvalidConfig, p.KeyPattern, p.Capacity)
 		}
 		if p.RefillRate <= 0 {
-			return fmt.Errorf("service: token bucket plan for %q requires RefillRate > 0, got %g", p.KeyPattern, p.RefillRate)
+			return fmt.Errorf("%w: token bucket plan for %q requires RefillRate > 0, got %g", ErrInvalidConfig, p.KeyPattern, p.RefillRate)
 		}
 	case tenant.AlgorithmSlidingWindowCounter, tenant.AlgorithmSlidingWindowLog:
 		if p.WindowMs <= 0 {
-			return fmt.Errorf("service: sliding window plan for %q requires WindowMs > 0, got %d", p.KeyPattern, p.WindowMs)
+			return fmt.Errorf("%w: sliding window plan for %q requires WindowMs > 0, got %d", ErrInvalidConfig, p.KeyPattern, p.WindowMs)
 		}
 		if p.Limit <= 0 {
-			return fmt.Errorf("service: sliding window plan for %q requires Limit > 0, got %d", p.KeyPattern, p.Limit)
+			return fmt.Errorf("%w: sliding window plan for %q requires Limit > 0, got %d", ErrInvalidConfig, p.KeyPattern, p.Limit)
 		}
 	}
 	return nil
