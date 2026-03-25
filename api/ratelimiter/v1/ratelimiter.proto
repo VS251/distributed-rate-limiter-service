@@ -1,0 +1,68 @@
+syntax = "proto3";
+
+package ratelimiter.v1;
+
+option go_package = "github.com/varunsalian/ratelimiter/api/ratelimiter/v1;ratelimiterv1";
+
+// RateLimiter exposes the core rate limit check operations.
+service RateLimiter {
+  // CheckLimit performs a single atomic rate limit check.
+  //
+  // Always returns OK status. Inspect the response body for the result:
+  //   allowed=true  → request is permitted
+  //   allowed=false → request is denied; retry_after_ms tells the caller when to retry
+  //
+  // Non-OK status codes indicate service-level failures:
+  //   NOT_FOUND        → no plan configured for the tenant+key pair
+  //   INVALID_ARGUMENT → empty tenant_id or key, or misconfigured plan
+  //   UNAVAILABLE      → backing store unreachable and plan is fail-closed
+  rpc CheckLimit(CheckLimitRequest) returns (CheckLimitResponse);
+
+  // CheckLimitBatch streams sequential rate limit checks over a single connection.
+  //
+  // Designed for hierarchical limits (e.g. per-user AND per-tenant): the client
+  // sends check N, reads the response, and decides whether to send check N+1.
+  // This allows client-side early exit — if check 1 is denied, check 2 is never
+  // sent and its counter is never touched.
+  //
+  // Each check is individually atomic; the two checks are NOT atomic with respect
+  // to each other. If check 1 succeeds and check 2 fails or errors, check 1's
+  // token is permanently consumed. See service docs for the fairness implications.
+  //
+  // Stream lifecycle:
+  //   - Client sends requests and reads responses in lockstep or pipelined.
+  //   - Client closes the send side (half-close) when done.
+  //   - Any non-OK status from the server closes the stream immediately.
+  rpc CheckLimitBatch(stream CheckLimitRequest) returns (stream CheckLimitResponse);
+}
+
+// CheckLimitRequest is the input for a single rate limit check.
+message CheckLimitRequest {
+  // tenant_id identifies the tenant whose plan to apply. Required.
+  string tenant_id = 1;
+
+  // key is the client-specific identifier, e.g. "user:42" or "ip:1.2.3.4". Required.
+  string key = 2;
+
+  // cost is the number of tokens to consume. Treated as 1 when zero or negative.
+  int32 cost = 3;
+}
+
+// CheckLimitResponse is the result of a single rate limit check.
+message CheckLimitResponse {
+  // allowed reports whether the request is permitted.
+  bool allowed = 1;
+
+  // remaining is the estimated tokens/requests left in the current window.
+  // -1 signals a degraded result: the store was unavailable and the request
+  // was allowed under a fail-open policy. Callers should log/alert on -1.
+  int64 remaining = 2;
+
+  // retry_after_ms is how many milliseconds the caller should wait before
+  // retrying. Zero when allowed=true.
+  int64 retry_after_ms = 3;
+
+  // reset_at_unix_ms is when the current window or token bucket fully resets,
+  // as a Unix timestamp in milliseconds.
+  int64 reset_at_unix_ms = 4;
+}
